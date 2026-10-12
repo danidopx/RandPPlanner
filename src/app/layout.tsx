@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "RandPPlanner | Studio Planner",
-  description: "Planeje seus eventos no Google Agenda e notas de forma rápida e estilosa.",
+  title: "Family Planner | Seus planos em um só lugar",
+  description: "Calendário, tarefas, lembretes e compartilhamento por WhatsApp.",
 };
 
 export default function RootLayout({

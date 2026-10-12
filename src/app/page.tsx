@@ -1,88 +1,52 @@
 "use client";
-
-import { useSession, signOut } from "next-auth/react";
-import { StudioLogin } from "@/components/StudioLogin";
-import { EventPlanner } from "@/components/EventPlanner";
-import { NotesAndTasks } from "@/components/NotesAndTasks";
-import { Sparkles, LogOut, CalendarCheck } from "lucide-react";
-import Image from "next/image";
-
-export default function Home() {
-  const { data: session, status } = useSession();
-
-  if (status === "loading") {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-[#0a0d14]">
-        <div className="w-8 h-8 border-3 border-purple-500 border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
-  }
-
-  if (!session) {
-    return <StudioLogin />;
-  }
-
-  return (
-    <div className="min-h-screen bg-[#0a0d14] text-slate-100 flex flex-col">
-      {/* Navbar Studio Style */}
-      <header className="border-b border-slate-800/80 bg-slate-900/60 backdrop-blur-xl sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-xl bg-gradient-to-tr from-purple-600 to-cyan-500 text-white shadow-md shadow-purple-900/40">
-              <CalendarCheck className="w-5 h-5" />
-            </div>
-            <div>
-              <span className="font-extrabold text-base tracking-tight bg-gradient-to-r from-purple-400 via-pink-400 to-cyan-400 bg-clip-text text-transparent">
-                RandPPlanner
-              </span>
-              <span className="ml-2 text-[10px] font-mono uppercase px-2 py-0.5 rounded-full bg-purple-500/10 border border-purple-500/20 text-purple-300">
-                Studio
-              </span>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2.5">
-              {session.user?.image ? (
-                <Image
-                  src={session.user.image}
-                  alt={session.user.name || "Avatar"}
-                  width={32}
-                  height={32}
-                  className="rounded-full ring-2 ring-purple-500/40"
-                />
-              ) : null}
-              <span className="text-xs font-medium text-slate-300 hidden sm:inline">
-                {session.user?.name}
-              </span>
-            </div>
-
-            <button
-              onClick={() => signOut()}
-              title="Encerrar sessão"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800/80 hover:bg-rose-500/20 hover:text-rose-400 border border-slate-700/60 text-xs font-semibold text-slate-300 transition-all cursor-pointer"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Sair</span>
-            </button>
-          </div>
-        </div>
-      </header>
-
-      {/* Main Content Layout */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-          {/* Coluna Principal: Formulário de Eventos */}
-          <div className="lg:col-span-7">
-            <EventPlanner />
-          </div>
-
-          {/* Coluna Lateral: Google Tasks & Notas Rápidas */}
-          <div className="lg:col-span-5">
-            <NotesAndTasks />
-          </div>
-        </div>
-      </main>
-    </div>
-  );
+import {useEffect,useState,useCallback} from "react";
+import {CalendarDays,Plus,Bell,Repeat,Share2,LogOut,CheckCircle2,Trash2,Clock,MapPin,Sparkles} from "lucide-react";
+import {login,signUp,logout,validSession,database,type AuthSession} from "@/lib/planner-supabase";
+type EventItem={id:string;user_id:string;title:string;description:string;location:string;starts_at:string;ends_at:string;recurrence:string;reminder_minutes:number};
+type Task={id:string;user_id:string;title:string;notes:string;status:string};
+const input="w-full bg-slate-800/80 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-purple-400";
+function nextOccurrences(e:EventItem,count=16):Date[]{
+ const start=new Date(e.starts_at);const result:Date[]=[];const now=new Date();const horizon=new Date(now.getTime()+45*86400000);
+ for(let i=0;i<(e.recurrence==="none"?1:370)&&result.length<count;i++){
+ const d=new Date(start);
+ if(e.recurrence==="daily")d.setUTCDate(d.getUTCDate()+i);
+ if(e.recurrence==="weekly")d.setUTCDate(d.getUTCDate()+7*i);
+ if(e.recurrence==="monthly"){const day=start.getUTCDate();d.setUTCDate(1);d.setUTCMonth(d.getUTCMonth()+i);if(d.getUTCMonth()!==((start.getUTCMonth()+i)%12))continue;d.setUTCDate(day);if(d.getUTCDate()!==day)continue;}
+ if(d>horizon)break;if(d>=new Date(now.getTime()-86400000))result.push(d);
+ }
+ return result;
+}
+export default function Home(){
+ const [session,setSession]=useState<AuthSession|null>(null),[checking,setChecking]=useState(true),[busy,setBusy]=useState(false),[err,setErr]=useState(""),[notice,setNotice]=useState("");
+ const [email,setEmail]=useState(""),[password,setPassword]=useState(""),[register,setRegister]=useState(false);
+ const [events,setEvents]=useState<EventItem[]>([]),[tasks,setTasks]=useState<Task[]>([]);
+ const [title,setTitle]=useState(""),[description,setDescription]=useState(""),[location,setLocation]=useState("");
+ const [start,setStart]=useState(""),[end,setEnd]=useState(""),[recurrence,setRecurrence]=useState("none"),[reminder,setReminder]=useState("30");
+ const [taskTitle,setTaskTitle]=useState(""),[taskNotes,setTaskNotes]=useState("");
+ const load=useCallback(async(s:AuthSession)=>{
+  try{const [e,t]=await Promise.all([database<EventItem[]>("family_planner_events","GET",s.access_token,{filter:"?select=*&order=starts_at.asc&limit=300"}),database<Task[]>("family_planner_tasks","GET",s.access_token,{filter:"?select=*&order=created_at.desc&limit=100"})]);setEvents(e);setTasks(t);}catch(ex){setErr(ex instanceof Error?ex.message:"Falha ao carregar dados");}
+ },[]);
+ useEffect(()=>{validSession().then(s=>{setSession(s);if(s)void load(s);}).finally(()=>setChecking(false));},[load]);
+ useEffect(()=>{
+  if(!session||typeof Notification==="undefined")return;
+  const key="family_planner_notified_";
+  const check=()=>{const now=Date.now();for(const e of events){for(const d of nextOccurrences(e,8)){const when=d.getTime()-e.reminder_minutes*60000;if(e.reminder_minutes>0&&now>=when&&now<d.getTime()+60000){const id=key+e.id+"_"+d.getTime();if(sessionStorage.getItem(id))continue;sessionStorage.setItem(id,"1");setNotice("⏰ "+e.title+" está chegando!");if(Notification.permission==="granted")new Notification("Family Planner",{body:e.title+" • "+d.toLocaleString("pt-BR")});}}}};
+  check();const interval=setInterval(check,30000);return()=>clearInterval(interval);
+ },[events,session]);
+ const authenticate=async(ev:React.FormEvent)=>{ev.preventDefault();setBusy(true);setErr("");try{const s=register?await signUp(email,password):await login(email,password);if(s){setSession(s);await load(s);}else setNotice("Confira seu e-mail para confirmar o cadastro antes de entrar.");}catch(ex){setErr(ex instanceof Error?ex.message:"Falha no acesso");}finally{setBusy(false);}};
+ const addEvent=async(ev:React.FormEvent)=>{ev.preventDefault();if(!session)return;setBusy(true);setErr("");try{if(!start||!end||new Date(end)<=new Date(start))throw new Error("O término precisa ser posterior ao início.");await database<EventItem[]>("family_planner_events","POST",session.access_token,{body:{user_id:session.user.id,title:title.trim(),description,location,starts_at:new Date(start).toISOString(),ends_at:new Date(end).toISOString(),recurrence,reminder_minutes:Number(reminder)}});setTitle("");setDescription("");setLocation("");setNotice("Evento salvo!");await load(session);}catch(ex){setErr(ex instanceof Error?ex.message:"Erro ao salvar evento");}finally{setBusy(false);}};
+ const addTask=async(ev:React.FormEvent)=>{ev.preventDefault();if(!session||!taskTitle.trim())return;setBusy(true);try{await database<Task[]>("family_planner_tasks","POST",session.access_token,{body:{user_id:session.user.id,title:taskTitle.trim(),notes:taskNotes}});setTaskTitle("");setTaskNotes("");await load(session);}catch(ex){setErr(ex instanceof Error?ex.message:"Erro ao salvar tarefa");}finally{setBusy(false);}};
+ const toggle=async(t:Task)=>{if(!session)return;try{await database<Task[]>("family_planner_tasks","PATCH",session.access_token,{filter:"?id=eq."+encodeURIComponent(t.id),body:{status:t.status==="completed"?"needsAction":"completed"}});await load(session);}catch(ex){setErr(String(ex));}};
+ const remove=async(type:"family_planner_events"|"family_planner_tasks",id:string)=>{if(!session)return;try{await database<unknown[]>(type,"DELETE",session.access_token,{filter:"?id=eq."+encodeURIComponent(id)});await load(session);}catch(ex){setErr(String(ex));}};
+ const share=(e:EventItem,d:Date)=>{const msg="📅 *"+e.title+"*\n🕒 "+d.toLocaleString("pt-BR")+"\n"+(e.location?"📍 "+e.location+"\n":"")+(e.description?"📝 "+e.description+"\n":"")+"🔁 "+({none:"Único",daily:"Diário",weekly:"Semanal",monthly:"Mensal"}[e.recurrence]||e.recurrence);window.open("https://wa.me/?text="+encodeURIComponent(msg),"_blank","noopener,noreferrer");};
+ const upcoming=events.flatMap(e=>nextOccurrences(e).map(d=>({e,d}))).sort((a,b)=>a.d.getTime()-b.d.getTime()).slice(0,40);
+ if(checking)return <main className="min-h-screen grid place-items-center bg-[#0a0d14] text-purple-300">Carregando seu Planner...</main>;
+ if(!session)return <main className="min-h-screen bg-[#0a0d14] text-white grid place-items-center p-4"><form onSubmit={authenticate} className="w-full max-w-md rounded-3xl border border-purple-500/20 bg-slate-900/80 p-8 space-y-5 shadow-2xl shadow-purple-900/20"><div className="text-center space-y-2"><div className="text-4xl">✨</div><h1 className="font-extrabold text-3xl bg-gradient-to-r from-purple-400 via-pink-400 to-cyan-400 text-transparent bg-clip-text">Family Planner</h1><p className="text-slate-400 text-sm">Sua rotina, do seu jeito. Sem conta Google.</p></div><input className={input} type="email" autoComplete="email" placeholder="Seu e-mail" required value={email} onChange={e=>setEmail(e.target.value)}/><input className={input} type="password" minLength={6} autoComplete={register?"new-password":"current-password"} placeholder="Sua senha" required value={password} onChange={e=>setPassword(e.target.value)}/>{err&&<p role="alert" className="text-rose-400 text-sm">{err}</p>}{notice&&<p className="text-emerald-400 text-sm">{notice}</p>}<button disabled={busy} className="w-full rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 py-3 font-bold disabled:opacity-50">{busy?"Aguarde...":register?"Criar conta":"Entrar"}</button><button type="button" onClick={()=>{setRegister(!register);setErr("");}} className="w-full text-sm text-cyan-300">{register?"Já tenho conta":"Criar uma conta com e-mail"}</button></form></main>;
+ return <main className="min-h-screen bg-[#0a0d14] text-slate-100"><header className="sticky top-0 z-10 border-b border-slate-800 bg-slate-900/90 backdrop-blur-xl"><div className="max-w-7xl mx-auto p-4 flex items-center justify-between"><div className="flex items-center gap-2 font-extrabold text-lg"><CalendarDays className="text-purple-400"/> <span className="bg-gradient-to-r from-purple-400 via-pink-400 to-cyan-400 text-transparent bg-clip-text">Family Planner</span></div><button onClick={async()=>{await logout();setSession(null);}} className="text-xs flex gap-2 items-center text-slate-300"><LogOut size={16}/> Sair</button></div></header>
+ <div className="max-w-7xl mx-auto p-4 md:p-8"><div className="mb-6"><h1 className="text-2xl md:text-3xl font-bold">Organize sua semana <span className="text-purple-400">✦</span></h1><p className="text-slate-400 text-sm">Eventos, tarefas e seus próximos planos em um só lugar.</p></div>
+ {err&&<p role="alert" className="mb-4 rounded-xl border border-rose-500/30 p-3 text-rose-300 bg-rose-950/30">{err}</p>}
+ {notice&&<div className="mb-4 rounded-xl border border-emerald-500/30 p-3 text-emerald-300 bg-emerald-950/20 flex justify-between"><span>{notice}</span><button onClick={()=>setNotice("")}>×</button></div>}
+ <div className="grid lg:grid-cols-12 gap-6"><div className="lg:col-span-7 space-y-6"><section className="rounded-3xl border border-slate-800 bg-slate-900/60 p-6"><h2 className="font-bold text-xl mb-5 flex gap-2 items-center"><Plus className="text-purple-400"/> Novo evento</h2><form onSubmit={addEvent} className="space-y-4"><input className={input} placeholder="Ex.: Prova de matemática 📚" maxLength={200} required value={title} onChange={e=>setTitle(e.target.value)}/><div className="grid sm:grid-cols-2 gap-3"><label className="text-xs text-slate-400">Início<input className={input+" mt-1"} required type="datetime-local" value={start} onChange={e=>setStart(e.target.value)}/></label><label className="text-xs text-slate-400">Término<input className={input+" mt-1"} required type="datetime-local" value={end} onChange={e=>setEnd(e.target.value)}/></label></div><div className="grid sm:grid-cols-2 gap-3"><label className="text-xs text-slate-400"><Repeat size={14} className="inline"/> Repetição<select className={input+" mt-1"} value={recurrence} onChange={e=>setRecurrence(e.target.value)}><option value="none">Uma vez</option><option value="daily">Todo dia</option><option value="weekly">Toda semana</option><option value="monthly">Todo mês</option></select></label><label className="text-xs text-slate-400"><Bell size={14} className="inline"/> Avisar antes<select className={input+" mt-1"} value={reminder} onChange={e=>setReminder(e.target.value)}><option value="0">Sem lembrete</option><option value="10">10 minutos</option><option value="30">30 minutos</option><option value="60">1 hora</option><option value="1440">1 dia</option></select></label></div><input className={input} placeholder="📍 Local ou link (opcional)" value={location} maxLength={200} onChange={e=>setLocation(e.target.value)}/><textarea className={input} placeholder="Detalhes (opcional)" rows={2} maxLength={1500} value={description} onChange={e=>setDescription(e.target.value)}/><button disabled={busy} className="w-full rounded-xl bg-gradient-to-r from-purple-600 via-pink-600 to-cyan-600 font-bold py-3 disabled:opacity-50"><Sparkles size={16} className="inline mr-2"/>Salvar evento</button></form></section>
+ <section className="rounded-3xl border border-slate-800 bg-slate-900/60 p-6"><h2 className="font-bold text-xl mb-4 flex gap-2 items-center"><CalendarDays className="text-pink-400"/> Próximos eventos</h2>{!upcoming.length?<p className="text-slate-400 text-sm">Nenhum evento nos próximos 45 dias.</p>:<div className="space-y-3">{upcoming.map(({e,d})=><div key={e.id+"-"+d.toISOString()} className="rounded-2xl border border-slate-700/50 bg-slate-800/50 p-4 flex justify-between gap-2"><div><p className="font-semibold">{e.title}</p><p className="text-xs text-purple-300 mt-1"><Clock size={12} className="inline mr-1"/>{d.toLocaleString("pt-BR",{dateStyle:"medium",timeStyle:"short"})} {e.recurrence!=="none"?"• "+e.recurrence:""}</p>{e.location&&<p className="text-xs text-slate-400 mt-1"><MapPin size={12} className="inline"/>{e.location}</p>}</div><div className="flex items-start gap-3"><button title="Compartilhar no WhatsApp" onClick={()=>share(e,d)} className="text-emerald-400"><Share2 size={18}/></button><button title="Apagar série inteira" onClick={()=>remove("family_planner_events",e.id)} className="text-rose-400"><Trash2 size={17}/></button></div></div>)}</div>}</section></div>
+ <div className="lg:col-span-5"><section className="rounded-3xl border border-slate-800 bg-slate-900/60 p-6"><h2 className="font-bold text-xl mb-4 flex gap-2 items-center"><CheckCircle2 className="text-cyan-400"/> Notas e tarefas</h2><form onSubmit={addTask} className="space-y-3 mb-5"><input className={input} required maxLength={200} placeholder="Qual a próxima missão?" value={taskTitle} onChange={e=>setTaskTitle(e.target.value)}/><input className={input} placeholder="Anotação opcional" value={taskNotes} onChange={e=>setTaskNotes(e.target.value)}/><button disabled={busy} className="rounded-xl w-full bg-cyan-600 hover:bg-cyan-500 py-2.5 font-semibold">Adicionar tarefa</button></form><div className="space-y-2">{tasks.length===0?<p className="text-slate-400 text-sm">Sua lista está vazia.</p>:tasks.map(t=><div key={t.id} className="flex gap-3 items-start bg-slate-800/50 border border-slate-700/40 rounded-xl p-3"><button onClick={()=>toggle(t)} aria-label="Concluir tarefa" className="text-cyan-400 mt-1"><CheckCircle2 size={18} fill={t.status==="completed"?"currentColor":"none"}/></button><div className="flex-1 min-w-0"><p className={t.status==="completed"?"line-through text-slate-500":"text-sm font-semibold"}>{t.title}</p>{t.notes&&<p className="text-xs text-slate-400">{t.notes}</p>}</div><button title="Compartilhar" className="text-emerald-400" onClick={()=>window.open("https://wa.me/?text="+encodeURIComponent("📌 "+t.title+"\n"+t.notes),"_blank","noopener,noreferrer")}><Share2 size={16}/></button><button title="Excluir" className="text-rose-400" onClick={()=>remove("family_planner_tasks",t.id)}><Trash2 size={16}/></button></div>)}</div></section><p className="text-xs text-slate-500 mt-4 px-2">🔔 Alertas do navegador funcionam enquanto o aplicativo estiver aberto. Para ativá-los, permita notificações no navegador.</p><button onClick={()=>{if(typeof Notification!=="undefined")void Notification.requestPermission().then(p=>setNotice(p==="granted"?"Notificações ativadas":"Notificações não autorizadas"));else setNotice("Seu navegador não suporta notificações.");}} className="text-xs text-cyan-300 mt-2 px-2">Ativar notificações</button></div></div></div></main>;
 }
