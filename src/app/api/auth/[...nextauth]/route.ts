@@ -17,6 +17,12 @@ export const authOptions: NextAuthOptions = {
     }),
   ],
   callbacks: {
+    async signIn({ profile }) {
+      const allowedEmail = process.env.ALLOWED_EMAIL?.trim().toLowerCase();
+      const email = profile?.email?.trim().toLowerCase();
+      // Fail closed: only the same Google account authorized for Studio can sign in.
+      return Boolean(allowedEmail && email && email === allowedEmail);
+    },
     async jwt({ token, account }) {
       if (account) {
         token.accessToken = account.access_token;
